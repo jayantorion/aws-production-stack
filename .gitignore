@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.python-version
+
+# Airflow
+airflow.db
+logs/
+*.log
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Env / secrets — NEVER commit credentials
+.env
+*.env
+!*.env.example
+secrets/
+credentials*.json
+
+# Data / local artifacts
+data/
+*.parquet
+*.csv
+!tests/fixtures/*.csv
+
+# Build / dist
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
