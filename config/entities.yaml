@@ -1,0 +1,73 @@
+# =============================================================================
+# ENTITY DEFINITIONS — retail domain (source of truth for all pipeline stages)
+# Used by: Airflow extraction DAG, Glue silver job, Athena DQ, Redshift DDL
+# =============================================================================
+defaults:
+  source_type: file            # production source types: mysql | sftp | rest_api
+  format: csv
+  delimiter: ","
+  header: false
+  encoding: utf-8
+
+entities:
+
+  departments:
+    load_type: full_snapshot
+    columns:
+      - {name: department_id,   type: int,    primary_key: true, nullable: false}
+      - {name: department_name, type: string, nullable: false}
+
+  categories:
+    load_type: full_snapshot
+    columns:
+      - {name: category_id,          type: int,    primary_key: true, nullable: false}
+      - {name: category_department_id, type: int,  nullable: false}
+      - {name: category_name,        type: string, nullable: false}
+
+  customers:
+    load_type: full_snapshot
+    columns:
+      - {name: customer_id,      type: int,    primary_key: true, nullable: false}
+      - {name: customer_fname,   type: string, nullable: false}
+      - {name: customer_lname,   type: string, nullable: false}
+      - {name: customer_email,   type: string, nullable: false}
+      - {name: customer_password, type: string, nullable: true}   # masked at silver (PII)
+      - {name: customer_street,  type: string, nullable: true}
+      - {name: customer_city,    type: string, nullable: true}
+      - {name: customer_state,   type: string, nullable: true}
+      - {name: customer_zipcode, type: string, nullable: true}
+
+  products:
+    load_type: full_snapshot
+    columns:
+      - {name: product_id,          type: int,    primary_key: true, nullable: false}
+      - {name: product_category_id, type: int,    nullable: false}
+      - {name: product_name,        type: string, nullable: false}
+      - {name: product_description, type: string, nullable: true}
+      - {name: product_price,       type: float,  nullable: true}
+      - {name: product_image,       type: string, nullable: true}
+
+  orders:
+    load_type: incremental
+    incremental:
+      watermark_column: order_date
+      lookback_days: 1          # late-arriving overlap window
+    columns:
+      - {name: order_id,          type: int,      primary_key: true, nullable: false}
+      - {name: order_date,        type: timestamp, nullable: false}
+      - {name: order_customer_id, type: int,      nullable: false}
+      - {name: order_status,      type: string,   nullable: false}
+
+  order_items:
+    load_type: incremental
+    incremental:
+      watermark_column: order_item_order_id   # driven by orders watermark window
+      driver_entity: orders
+      driver_key: order_id
+    columns:
+      - {name: order_item_id,            type: int,   primary_key: true, nullable: false}
+      - {name: order_item_order_id,      type: int,   nullable: false}
+      - {name: order_item_product_id,    type: int,   nullable: false}
+      - {name: order_item_quantity,      type: int,   nullable: false}
+      - {name: order_item_subtotal,      type: float, nullable: false}
+      - {name: order_item_product_price, type: float, nullable: true}

@@ -38,6 +38,14 @@ Power BI (gold consumption layer)
 | Schema drift | Additive evolution allowed; breaking changes blocked + alerted |
 | Scale (30–50 GB/day) | Partition pruning, 128–512 MB files, Glue auto-scaling, Redshift dist/sort keys + WLM |
 
+## 🗃️ Source Data
+
+Development source-of-record: **retail_db** (`retail_db-master`) — 6 entities:
+`departments` (6), `categories` (58), `customers` (12,435), `products` (1,345),
+`orders` (68,883, incremental on `order_date`), `order_items` (172,198, incremental via orders window).
+Configured in `config/settings.yaml` → `sources.local_base_path`.
+In production, the same entity configs switch to MySQL/SFTP/REST extraction without code changes.
+
 ## 📁 Repository Structure
 
 ```

@@ -1,0 +1,47 @@
+# =============================================================================
+# ENVIRONMENT SETTINGS — override any value with env var SETTINGS_<KEY_PATH>
+# e.g. SETTINGS_RAW_BUCKET=prod-dep-raw
+# =============================================================================
+environment: dev
+region: us-east-1
+
+s3:
+  raw_bucket: dev-dep-raw
+  silver_bucket: dev-dep-silver
+  quarantine_bucket: dev-dep-quarantine
+  config_prefix: config          # where entities.yaml is staged for Glue/Lambda
+
+# Local (dev) source of record — production replaces this with MySQL/SFTP/REST
+sources:
+  local_base_path: "J:/downloads docs/retail_db-master"
+
+dynamodb:
+  batch_registry_table: dep_batch_registry   # batch_id -> stage/status audit
+
+lambda:
+  arrival_validator: dep-arrival-validator
+
+glue:
+  database_raw: raw_db
+  database_silver: silver_db
+  crawler_name: dep-raw-crawler
+  job_name: dep-retail-silver-job
+  job_role: arn:aws:iam::000000000000:role/dep-glue-job-role
+
+athena:
+  output_location: s3://dev-dep-athena-results/
+  dq_database: silver_db
+
+redshift:
+  workgroup: dep-workgroup
+  database: devdw
+  staging_schema: staging
+  final_schema: analytics
+
+sns:
+  alerts_topic_arn: arn:aws:sns:us-east-1:000000000000:dep-alerts
+
+pipeline:
+  schedule_cron: "0 2 * * *"    # daily 02:00 UTC bulk window
+  file_target_mb: 256
+  lookback_days: 1

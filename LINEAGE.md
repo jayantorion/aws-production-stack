@@ -267,7 +267,15 @@ extract → land_manifest → lambda_validate (sensor) → crawler (sensor)
 
 | Entity | Source | Extraction | Bronze Path | Silver Table | Gold Table (Redshift) | Consumer |
 |--------|--------|-----------|-------------|--------------|----------------------|----------|
-| *(to be filled as pipeline entities are built)* | | | | | | |
+| departments | file (`retail_db-master/departments`) → prod: MySQL | Airflow `land_bronze_departments`, full snapshot | `raw/file/departments/ingest_date=…/batch_id=…/` | `silver/departments/` (Parquet+Snappy) | `staging.departments` → `analytics.departments` (DISTSTYLE ALL) | Power BI |
+| categories | file (`retail_db-master/categories`) → prod: MySQL | Airflow `land_bronze_categories`, full snapshot | `raw/file/categories/…` | `silver/categories/` | `analytics.categories` (DISTSTYLE ALL) | Power BI |
+| customers | file (`retail_db-master/customers`) → prod: MySQL | Airflow `land_bronze_customers`, full snapshot | `raw/file/customers/…` | `silver/customers/` (PII sha2-masked) | `analytics.customers` (DISTKEY customer_id, SORTKEY customer_id) | Power BI |
+| products | file (`retail_db-master/products`) → prod: MySQL | Airflow `land_bronze_products`, full snapshot | `raw/file/products/…` | `silver/products/` | `analytics.products` (DISTKEY product_id) | Power BI |
+| orders | file (`retail_db-master/orders`) → prod: MySQL | Airflow `land_bronze_orders`, **incremental** on `order_date` (1d lookback) | `raw/file/orders/…` | `silver/orders/` | `analytics.orders` (DISTKEY order_customer_id, SORTKEY order_date) | Power BI |
+| order_items | file (`retail_db-master/order_items`) → prod: MySQL | Airflow `land_bronze_order_items`, **incremental** driven by orders window (`order_item_order_id`) | `raw/file/order_items/…` | `silver/order_items/` | `analytics.order_items` (DISTKEY order_item_order_id — co-located with orders) | Power BI |
+
+**Row counts (source-of-record, verified 2026-09-02):** departments=6, categories=58,
+customers=12,435, products=1,345, orders=68,883, order_items=172,198.
 
 ---
 
@@ -294,7 +302,16 @@ data-engineering-platform/
 | Date | Change | Status |
 |------|--------|--------|
 | 2026-09-02 | Architecture defined, LINEAGE created | ✅ Done |
-| Scaffold, DAGs, Glue jobs, Lambda, SQL | Pipeline implementation | ⏳ Pending |
+| 2026-09-02 | Repo `jayantorion/aws-production-stack` initialized (README, .gitignore) | ✅ Done |
+| 2026-09-02 | Source data adopted: `J:\downloads docs\retail_db-master` (6 entities, ~9.5 MB) | ✅ Done |
+| 2026-09-02 | `config/`: entities.yaml (schema/PK/watermark/load-type per entity), settings.yaml | ✅ Done |
+| 2026-09-02 | `dags/utils/`: config_loader (env overrides), bronze.py (batch_id landing, manifests, incremental filter) | ✅ Done |
+| 2026-09-02 | `dags/retail_medallion_pipeline.py`: full DAG land→lambda→crawler→glue→athena DQ→redshift | ✅ Done |
+| 2026-09-02 | `glue_jobs/retail_silver_job.py`: PySpark silver ETL (DQ, dedupe, schema evolution, PII mask, replaceWhere Parquet) | ✅ Done |
+| 2026-09-02 | `lambda/arrival_validator/`: event-driven validation gate (checksum, quarantine, DynamoDB registry, crawler trigger) | ✅ Done |
+| 2026-09-02 | `sql/`: Redshift DDL (dist/sortkeys), idempotent COPY+merge template, Athena DQ checks | ✅ Done |
+| 2026-09-02 | `tests/` (4 passed) + `scripts/smoke_bronze.py` (all 6 entities landed OK) + GitHub Actions CI | ✅ Done |
+| Deployment: Airflow/MWAA, Glue job+crawler registration, Lambda deploy, DynamoDB table, Redshift env | AWS environment setup | ⏳ Pending |
 
 > **Maintainer note:** whenever you add/modify a stage, table, or optimization — update the
 > relevant section AND the DATASET LINEAGE TABLE + CHANGE LOG here. This file is the project's memory.
