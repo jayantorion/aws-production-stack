@@ -43,7 +43,11 @@ def read_source_csv(entity: str, entity_cfg: Dict[str, Any], base_path: str) -> 
     conventional layout ``<entity>/part-00000`` under the source base path.
     """
     location = entity_cfg.get("source", {}).get("location", f"{entity}/part-00000")
-    path = Path(base_path) / location
+    base = Path(base_path)
+    if not base.is_absolute():
+        # relative paths resolve against the repository root (sample data in-repo)
+        base = Path(__file__).resolve().parents[2] / base
+    path = base / location
     if not path.exists():
         raise FileNotFoundError(f"Source file not found: {path}")
     names = [c["name"] for c in entity_cfg["columns"]]

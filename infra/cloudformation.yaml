@@ -1,0 +1,176 @@
+# =============================================================================
+# data-engineering-platform — core infrastructure (CloudFormation)
+# Deploys: S3 buckets, DynamoDB batch registry, SNS alerts, IAM roles,
+#          Glue database + crawler + job, Lambda validator.
+#          (S3→Lambda event trigger is enabled by scripts/configure_events.sh
+#           after deploy — avoids a CloudFormation circular dependency.)
+#
+#   aws cloudformation deploy \
+#     --template-file infra/cloudformation.yaml \
+#     --stack-name dep-core --capabilities CAPABILITY_NAMED_IAM \
+#     --parameter-overrides LambdaCodeBucket=my-deploy-bucket Environment=dev
+# =============================================================================
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Data Engineering Platform - medallion pipeline core infra
+
+Parameters:
+  Environment:      { Type: String, Default: dev }
+  DeployBucket:     { Type: String, Description: S3 bucket holding lambda zip + glue script }
+  LambdaCodeKey:    { Type: String, Default: lambda/arrival_validator.zip }
+  GlueScriptKey:    { Type: String, Default: glue/retail_silver_job.py }
+  GlueJobRoleArn:   { Type: String, Description: Existing role ARN for the Glue ETL job }
+
+Resources:
+
+  # ------------------------------- S3 -------------------------------
+  RawBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${Environment}-dep-raw-${AWS::AccountId}"
+      PublicAccessBlockConfiguration: { BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true }
+      BucketEncryption: { ServerSideEncryptionConfiguration: [{ ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 } }] }
+      LifecycleConfiguration:
+        Rules:
+          - Id: raw-to-glacier
+            Status: Enabled
+            Transitions: [{ TransitionInDays: 30, StorageClass: GLACIER }]
+            ExpirationInDays: 180
+
+  SilverBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${Environment}-dep-silver-${AWS::AccountId}"
+      PublicAccessBlockConfiguration: { BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true }
+      BucketEncryption: { ServerSideEncryptionConfiguration: [{ ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 } }] }
+
+  QuarantineBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${Environment}-dep-quarantine-${AWS::AccountId}"
+
+  AthenaResultsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${Environment}-dep-athena-results-${AWS::AccountId}"
+
+  # --------------------------- DynamoDB ------------------------------
+  BatchRegistry:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "dep_batch_registry-${Environment}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: batch_id, AttributeType: S }
+        - { AttributeName: entity,   AttributeType: S }
+      KeySchema:
+        - { AttributeName: batch_id, KeyType: HASH }
+        - { AttributeName: entity,   KeyType: RANGE }
+      GlobalSecondaryIndexes:
+        - IndexName: entity-status-index        # resume: find open batch per entity
+          KeySchema: [{ AttributeName: entity, KeyType: HASH }]
+          Projection: { ProjectionType: ALL }
+
+  # ------------------------------- SNS -------------------------------
+  AlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties: { TopicName: !Sub "dep-alerts-${Environment}" }
+
+
+  # ----------------------------- Lambda ------------------------------
+  ValidatorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "dep-lambda-validator-${Environment}"
+      AssumeRolePolicyDocument:
+        Statement: [{ Action: sts:AssumeRole, Effect: Allow, Principal: { Service: lambda.amazonaws.com } }]
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]
+      Policies:
+        - PolicyName: validator-access
+          PolicyDocument:
+            Statement:
+              - { Effect: Allow, Action: [s3:GetObject, s3:ListBucket], Resource: [!GetAtt RawBucket.Arn, !Sub "${RawBucket.Arn}/*"] }
+              - { Effect: Allow, Action: [s3:PutObject, s3:CopyObject, s3:DeleteObject], Resource: [!Sub "${QuarantineBucket.Arn}/*"] }
+              - { Effect: Allow, Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:Query], Resource: [!GetAtt BatchRegistry.Arn, !Sub "${BatchRegistry.Arn}/index/*"] }
+              - { Effect: Allow, Action: [glue:StartCrawler, glue:GetCrawler], Resource: "*" }
+              - { Effect: Allow, Action: [sns:Publish], Resource: !Ref AlertsTopic }
+
+  ArrivalValidator:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "dep-arrival-validator-${Environment}"
+      Runtime: python3.12
+      Handler: handler.handler
+      Timeout: 120
+      MemorySize: 256
+      Role: !GetAtt ValidatorRole.Arn
+      Environment:
+        Variables:
+          BATCH_REGISTRY_TABLE: !Ref BatchRegistry
+          CRAWLER_NAME: !Ref RawCrawler
+          QUARANTINE_BUCKET: !Ref QuarantineBucket
+          ALERTS_TOPIC_ARN: !Ref AlertsTopic
+      Code: { S3Bucket: !Ref DeployBucket, S3Key: !Ref LambdaCodeKey }
+
+  ValidatorPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ArrivalValidator
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !GetAtt RawBucket.Arn
+      SourceAccount: !Ref AWS::AccountId
+
+  # ------------------------------ Glue -------------------------------
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      DatabaseInput: { Name: !Sub "raw_db_${Environment}" }
+      CatalogId: !Ref AWS::AccountId
+
+  RawCrawlerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "dep-crawler-${Environment}"
+      AssumeRolePolicyDocument:
+        Statement: [{ Action: sts:AssumeRole, Effect: Allow, Principal: { Service: glue.amazonaws.com } }]
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole]
+      Policies:
+        - PolicyName: raw-read
+          PolicyDocument:
+            Statement: [{ Effect: Allow, Action: [s3:GetObject, s3:ListBucket], Resource: [!GetAtt RawBucket.Arn, !Sub "${RawBucket.Arn}/*"] }]
+
+  RawCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Sub "dep-raw-crawler-${Environment}"
+      Role: !GetAtt RawCrawlerRole.Arn
+      DatabaseName: !Ref GlueDatabase
+      Targets:
+        S3Targets: [{ Path: !Sub "s3://${RawBucket}/raw/" }]
+      SchemaChangePolicy: { UpdateBehavior: UPDATE_IN_DATABASE, DeleteBehavior: LOG }
+
+  SilverJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub "dep-retail-silver-job-${Environment}"
+      Role: !Ref GlueJobRoleArn
+      Command:
+        Name: glueetl
+        ScriptLocation: !Sub "s3://${DeployBucket}/${GlueScriptKey}"
+        PythonVersion: "3.9"
+      GlueVersion: "4.0"
+      WorkerType: G.2X
+      NumberOfWorkers: 10            # runtime right-sized per run by the DAG (capacity.py)
+      MaxRetries: 1
+
+Outputs:
+  RawBucket:        { Value: !Ref RawBucket }
+  SilverBucket:     { Value: !Ref SilverBucket }
+  QuarantineBucket: { Value: !Ref QuarantineBucket }
+  AthenaResults:    { Value: !Ref AthenaResultsBucket }
+  BatchRegistry:    { Value: !Ref BatchRegistry }
+  AlertsTopic:      { Value: !Ref AlertsTopic }
+  CrawlerName:      { Value: !Ref RawCrawler }
+  GlueJobName:      { Value: !Ref SilverJob }
+  ValidatorArn:     { Value: !GetAtt ArrivalValidator.Arn }
+

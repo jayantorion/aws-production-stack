@@ -13,7 +13,7 @@ s3:
 
 # Local (dev) source of record — production replaces this with MySQL/SFTP/REST
 sources:
-  local_base_path: "J:/downloads docs/retail_db-master"
+  local_base_path: "sample_data/retail_db"   # relative to repo root; prod: MySQL/SFTP/REST
 
 dynamodb:
   batch_registry_table: dep_batch_registry   # batch_id -> stage/status audit

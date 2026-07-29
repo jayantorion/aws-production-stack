@@ -23,11 +23,14 @@ from utils.bronze import (
     land_to_bronze,
     read_source_csv,
 )
+from utils.capacity import plan_from_manifests
 from utils.config_loader import load_entities, load_settings
+from utils.state_store import StateStore
 
 SETTINGS = load_settings()
 ENTITIES = load_entities()
 ENTITY_NAMES = list(ENTITIES.keys())
+STATE = StateStore(region=SETTINGS["region"])
 
 DEFAULT_ARGS = {
     "owner": "data-platform",
@@ -42,16 +45,24 @@ DEFAULT_ARGS = {
 # Task callables
 # --------------------------------------------------------------------------- #
 def land_entity_task(entity: str, watermark: str | None, ceiling: str | None, **context) -> dict:
-    """Extract (or simulate extract) -> land to bronze -> return manifest."""
+    """Extract -> land to bronze -> checkpoint LANDED.
+
+    Resume-safe: if a previous run of this entity failed mid-pipeline, its open
+    batch is REUSED (same batch_id -> same S3 prefix overwritten, never
+    appended), so a rerun after a 60%-processed failure creates no duplicates.
+    """
     cfg = ENTITIES[entity]
-    batch_id = generate_batch_id()
+    open_batch = STATE.open_batch(entity)
+    batch_id = open_batch["batch_id"] if open_batch else generate_batch_id()
     df = read_source_csv(entity, cfg, SETTINGS["sources"]["local_base_path"])
     df = apply_incremental_filter(df, cfg, watermark, ceiling)
     s3 = boto3.client("s3", region_name=SETTINGS["region"])
-    return land_to_bronze(
+    manifest = land_to_bronze(
         df, entity, cfg, batch_id, SETTINGS["s3"]["raw_bucket"], s3,
         watermark=watermark, ceiling=ceiling,
     )
+    STATE.mark(batch_id, entity, "LANDED", {"row_count": manifest["row_count"]})
+    return manifest
 
 
 def trigger_arrival_validation(**context) -> list[str]:
@@ -67,6 +78,9 @@ def trigger_arrival_validation(**context) -> list[str]:
         InvocationType="Event",
         Payload=json.dumps({"batches": manifests}),
     )
+    for m in manifests:
+        STATE.mark(m["batch_id"], m["entity"], "VALIDATED",
+                   {"row_count": m["row_count"]})
     return batch_ids
 
 
@@ -80,20 +94,31 @@ def _crawler_ready() -> bool:
 
 
 def start_glue_silver_job(**context) -> str:
-    """Submit the Glue silver ETL job run for all landed batches."""
+    """Submit the Glue silver ETL run, RIGHT-SIZED to the actual batch volume.
+
+    Capacity is planned from the real landed bytes (manifests) — a day where
+    the source doubles from 40 GB to 80 GB automatically gets double the
+    workers, keeping runtime inside the same SLA (utils/capacity.py tiers).
+    """
     ti = context["ti"]
-    batch_ids = ti.xcom_pull(task_ids="lambda_arrival_validation")
+    manifests = [ti.xcom_pull(task_ids=f"land_bronze_{e}") for e in ENTITY_NAMES]
+    batch_ids = [m["batch_id"] for m in manifests]
+    plan = plan_from_manifests(manifests)
     glue = boto3.client("glue", region_name=SETTINGS["region"])
     resp = glue.start_job_run(
         JobName=SETTINGS["glue"]["job_name"],
+        WorkerType=plan["worker_type"],                 # dynamic right-sizing
+        NumberOfWorkers=plan["number_of_workers"],
         Arguments={
             "--ENTITIES": json.dumps(ENTITY_NAMES),
             "--BATCH_IDS": json.dumps(batch_ids),
             "--RAW_DB": SETTINGS["glue"]["database_raw"],
             "--SILVER_BUCKET": SETTINGS["s3"]["silver_bucket"],
             "--CONFIG_S3": f"s3://{SETTINGS['s3']['raw_bucket']}/{SETTINGS['s3']['config_prefix']}/entities.yaml",
+            "--INPUT_GB": str(plan["input_gb"]),
         },
     )
+    print(f"Glue capacity plan: {plan}")
     return resp["JobRunId"]
 
 
@@ -105,25 +130,38 @@ def _glue_job_done(**context) -> bool:
     state = resp["JobRun"]["JobRunState"]
     if state in ("FAILED", "ERROR", "STOPPED", "TIMEOUT"):
         raise RuntimeError(f"Glue job {job_run_id} ended in {state}")
-    return state == "SUCCEEDED"
+    if state == "SUCCEEDED":
+        manifests = [ti.xcom_pull(task_ids=f"land_bronze_{e}") for e in ENTITY_NAMES]
+        for m in manifests:                      # checkpoint: TRANSFORMED
+            STATE.mark(m["batch_id"], m["entity"], "TRANSFORMED")
+        return True
+    return False
 
 
 def athena_dq_gate(**context) -> str:
     """Run Athena DQ checks against silver; hard-stop the pipeline on FAIL."""
     from utils.athena_dq import run_dq_suite  # uses sql/athena_dq_checks.sql logic
 
-    return run_dq_suite(SETTINGS, batch_ids=context["ti"].xcom_pull(
+    result = run_dq_suite(SETTINGS, batch_ids=context["ti"].xcom_pull(
         task_ids="lambda_arrival_validation"))
+    manifests = [context["ti"].xcom_pull(task_ids=f"land_bronze_{e}") for e in ENTITY_NAMES]
+    for m in manifests:                              # checkpoint: DQ_PASSED
+        STATE.mark(m["batch_id"], m["entity"], "DQ_PASSED")
+    return result
 
 
 def redshift_load(**context) -> list[str]:
     """COPY silver -> staging -> transactional merge for each entity batch."""
     from utils.redshift_loader import load_all_entities
 
-    return load_all_entities(
+    results = load_all_entities(
         SETTINGS,
         batch_ids=context["ti"].xcom_pull(task_ids="lambda_arrival_validation"),
     )
+    manifests = [context["ti"].xcom_pull(task_ids=f"land_bronze_{e}") for e in ENTITY_NAMES]
+    for m in manifests:                              # checkpoint: LOADED (batch closed)
+        STATE.mark(m["batch_id"], m["entity"], "LOADED")
+    return results
 
 
 # --------------------------------------------------------------------------- #

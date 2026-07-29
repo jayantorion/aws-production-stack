@@ -297,7 +297,40 @@ data-engineering-platform/
 
 ---
 
-## 11. CHANGE LOG / STATUS
+## 11. SCALABILITY & RESUMABILITY (added 2026-09-02)
+
+### 11.1 Handling data growth (40 GB → 80 GB → increasing daily)
+- **Dynamic Glue capacity** (`dags/utils/capacity.py`): worker fleet is planned from the
+  actual landed bytes in each batch's manifest — tiers 4 G.1X → 120 G.2X; an 80 GB day
+  automatically runs ~2× the workers of a 40 GB day within the same SLA.
+- **Partition pruning** at every stage keeps cost/runtime proportional to *new* data only.
+- **Redshift**: incremental COPY of new data only; RA3 resize for growth; WLM isolation.
+- **S3 lifecycle**: raw → Glacier @30d, expire @180d; silver Parquet ~0.2× raw.
+- **Concurrency guard**: Airflow `max_active_runs=1`; one active batch per entity.
+- **Growth headroom** design target: 100 GB/day without architecture change (see §6).
+
+### 11.2 Mid-pipeline failure → resume without duplicates
+- **Checkpoint state machine** (`dags/utils/state_store.py`, DynamoDB `batch_registry`):
+  `LANDED → VALIDATED → CRAWLED → TRANSFORMED → DQ_PASSED → LOADED`, monotonic
+  (forward-only) so stale retries cannot regress state.
+- **Open-batch reuse**: on rerun, `StateStore.open_batch(entity)` returns the last not-LOADED
+  batch — the DAG re-lands **the same batch_id** (same S3 prefix overwritten, never appended).
+- **Defense in depth**: even if checkpoints were lost, every stage remains individually
+  idempotent (batch-scoped overwrite / transactional merge) — see §3 matrix.
+
+### 11.3 New/changed components
+| Component | Purpose |
+|---|---|
+| `dags/utils/state_store.py` | DynamoDB checkpoint store + open-batch lookup (GSI `entity-status-index`) |
+| `dags/utils/capacity.py` | manifest-bytes → Glue WorkerType/NumberOfWorkers planning |
+| `infra/cloudformation.yaml` | IaC: buckets, registry table, SNS, IAM, Glue DB/crawler/job, Lambda |
+| `scripts/deploy.sh` | one-command deploy: package → CFN → config upload → S3 event wiring |
+| `sample_data/retail_db/` | retail_db sample dataset committed in-repo (default dev source) |
+| `tests/test_state_store.py`, `tests/test_capacity.py` | 9 new unit tests (13 total) |
+
+---
+
+## 12. CHANGE LOG / STATUS
 
 | Date | Change | Status |
 |------|--------|--------|
@@ -311,6 +344,12 @@ data-engineering-platform/
 | 2026-09-02 | `lambda/arrival_validator/`: event-driven validation gate (checksum, quarantine, DynamoDB registry, crawler trigger) | ✅ Done |
 | 2026-09-02 | `sql/`: Redshift DDL (dist/sortkeys), idempotent COPY+merge template, Athena DQ checks | ✅ Done |
 | 2026-09-02 | `tests/` (4 passed) + `scripts/smoke_bronze.py` (all 6 entities landed OK) + GitHub Actions CI | ✅ Done |
+| 2026-09-02 | Scalability: dynamic Glue capacity planning from manifest bytes (`capacity.py`), DAG integration | ✅ Done |
+| 2026-09-02 | Resumability: DynamoDB checkpoint state machine (`state_store.py`), open-batch reuse on rerun — zero duplicates after mid-pipeline failure | ✅ Done |
+| 2026-09-02 | Sample data committed in-repo (`sample_data/retail_db/`), default source switched to relative path | ✅ Done |
+| 2026-09-02 | IaC: `infra/cloudformation.yaml` (buckets, registry, SNS, IAM, Glue, Lambda) + `scripts/deploy.sh` | ✅ Done |
+| 2026-09-02 | README rewritten: file-by-file reference + 10-step implementation guide (all tools) + growth/failure-recovery explanations | ✅ Done |
+| 2026-09-02 | Tests expanded to 13 (state-store resume, capacity tiers) — all passing | ✅ Done |
 | Deployment: Airflow/MWAA, Glue job+crawler registration, Lambda deploy, DynamoDB table, Redshift env | AWS environment setup | ⏳ Pending |
 
 > **Maintainer note:** whenever you add/modify a stage, table, or optimization — update the
