@@ -1,5 +1,4 @@
 """Unit tests for the bronze landing utilities (idempotency core)."""
-import io
 import json
 import sys
 from pathlib import Path
@@ -8,7 +7,7 @@ import pandas as pd
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dags"))
-from utils import bronze  # noqa: E402
+from utils import bronze
 
 
 class FakeS3:

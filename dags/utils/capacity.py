@@ -11,7 +11,7 @@ Strategy:
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 # (max_input_GB, worker_type, workers, estimated_minutes)
 TIERS = [
@@ -24,7 +24,7 @@ TIERS = [
 FALLBACK = ("G.2X", 120, 75)   # beyond all tiers: max out + alert
 
 
-def plan_glue_capacity(total_bytes: float) -> Dict[str, Any]:
+def plan_glue_capacity(total_bytes: float) -> dict[str, Any]:
     """Map total batch input size to a Glue worker plan."""
     gb = total_bytes / (1024 ** 3)
     for max_gb, worker_type, workers, mins in TIERS:
@@ -35,7 +35,7 @@ def plan_glue_capacity(total_bytes: float) -> Dict[str, Any]:
             "number_of_workers": FALLBACK[1], "estimated_minutes": FALLBACK[2]}
 
 
-def plan_from_manifests(manifests: List[Dict[str, Any]]) -> Dict[str, Any]:
+def plan_from_manifests(manifests: list[dict[str, Any]]) -> dict[str, Any]:
     """Sum the actual landed bytes across batch manifests and size the job."""
     total = 0
     for m in manifests:

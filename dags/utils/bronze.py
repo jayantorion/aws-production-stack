@@ -20,7 +20,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pandas as pd
 
@@ -36,7 +36,7 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def read_source_csv(entity: str, entity_cfg: Dict[str, Any], base_path: str) -> pd.DataFrame:
+def read_source_csv(entity: str, entity_cfg: dict[str, Any], base_path: str) -> pd.DataFrame:
     """Read a raw source file as-is (bronze = faithful landing, no typing yet).
 
     Location resolution: explicit ``source.location`` in entities.yaml, else the
@@ -64,9 +64,9 @@ def read_source_csv(entity: str, entity_cfg: Dict[str, Any], base_path: str) -> 
 
 def apply_incremental_filter(
     df: pd.DataFrame,
-    entity_cfg: Dict[str, Any],
-    watermark: Optional[str],
-    ceiling: Optional[str],
+    entity_cfg: dict[str, Any],
+    watermark: str | None,
+    ceiling: str | None,
 ) -> pd.DataFrame:
     """Filter rows to (watermark, ceiling] window. Full snapshots pass through."""
     if entity_cfg.get("load_type") != "incremental":
@@ -94,19 +94,19 @@ def manifest_s3_key(source: str, entity: str, ingest_date: str, batch_id: str) -
 def land_to_bronze(
     df: pd.DataFrame,
     entity: str,
-    entity_cfg: Dict[str, Any],
+    entity_cfg: dict[str, Any],
     batch_id: str,
     raw_bucket: str,
     s3_client: Any,
-    watermark: Optional[str] = None,
-    ceiling: Optional[str] = None,
-) -> Dict[str, Any]:
+    watermark: str | None = None,
+    ceiling: str | None = None,
+) -> dict[str, Any]:
     """Write dataframe to bronze S3 as delimited parts + manifest. Returns manifest dict."""
     source = entity_cfg.get("source_type", "file")
     ingest_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     base_key = f"raw/{source}/{entity}/ingest_date={ingest_date}/batch_id={batch_id}"
 
-    files: List[Dict[str, Any]] = []
+    files: list[dict[str, Any]] = []
     total_rows = 0
     delimiter = entity_cfg.get("delimiter", ",")
 
@@ -120,7 +120,7 @@ def land_to_bronze(
         files.append({"key": key, "bytes": len(payload), "checksum": checksum_bytes(payload), "rows": len(chunk)})
         total_rows += len(chunk)
 
-    manifest: Dict[str, Any] = {
+    manifest: dict[str, Any] = {
         "batch_id": batch_id,
         "entity": entity,
         "source": source,

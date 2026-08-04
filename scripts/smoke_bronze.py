@@ -8,8 +8,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dags"))
 
-from utils import bronze  # noqa: E402
-from utils.config_loader import load_entities, load_settings  # noqa: E402
+from utils import bronze
+from utils.config_loader import load_entities, load_settings
 
 
 class FakeS3:

@@ -16,7 +16,6 @@ from datetime import datetime, timedelta
 import boto3
 from airflow import DAG
 from airflow.operators.python import PythonOperator, PythonSensor
-
 from utils.bronze import (
     apply_incremental_filter,
     generate_batch_id,

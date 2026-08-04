@@ -1,0 +1,15 @@
+# Ruff configuration for data-engineering-platform
+line-length = 100
+target-version = "py39"
+
+[lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "RUF", "G", "DTZ", "BLE"]
+ignore = [
+    "DTZ001",  # Airflow DAG start_date is intentionally naive (UTC by convention)
+    "BLE001",  # broad except in Lambda/state_store is deliberate fail-safe handling
+    "G004",    # f-string logging is fine for our use (Glue logger, CloudWatch)
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["E501"]
+"glue_jobs/*" = ["E402"]  # script-style entrypoint: args resolved before imports

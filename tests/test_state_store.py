@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dags"))
-from utils.state_store import STAGES, StateStore  # noqa: E402
+from utils.state_store import STAGES, StateStore
 
 
 class FakeTable:

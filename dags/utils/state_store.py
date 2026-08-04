@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any
 
 import boto3
 
@@ -30,19 +30,19 @@ def _now() -> str:
 class StateStore:
     """Thin DynamoDB wrapper. Injectable ``table`` enables unit testing."""
 
-    def __init__(self, table: Optional[Any] = None,
-                 table_name: Optional[str] = None, region: Optional[str] = None):
+    def __init__(self, table: Any | None = None,
+                 table_name: str | None = None, region: str | None = None):
         if table is None:
             table_name = table_name or os.environ.get("BATCH_REGISTRY_TABLE", "dep_batch_registry")
             table = boto3.resource("dynamodb", region_name=region).Table(table_name)
         self.table = table
 
     # ------------------------------------------------------------------ #
-    def get(self, batch_id: str, entity: str) -> Optional[Dict[str, Any]]:
+    def get(self, batch_id: str, entity: str) -> dict[str, Any] | None:
         resp = self.table.get_item(Key={"batch_id": batch_id, "entity": entity})
         return resp.get("Item")
 
-    def mark(self, batch_id: str, entity: str, stage: str, detail: Optional[dict] = None) -> None:
+    def mark(self, batch_id: str, entity: str, stage: str, detail: dict | None = None) -> None:
         """Advance the batch to ``stage`` — only forward, never backward."""
         if stage not in STAGES:
             raise ValueError(f"unknown stage: {stage}")
@@ -63,7 +63,7 @@ class StateStore:
         item = self.get(batch_id, entity)
         return bool(item and int(item.get("stage_index", -1)) >= STAGES.index(stage))
 
-    def open_batch(self, entity: str, limit: int = 25) -> Optional[Dict[str, Any]]:
+    def open_batch(self, entity: str, limit: int = 25) -> dict[str, Any] | None:
         """Return the most recent NOT-fully-loaded batch for an entity, if any.
 
         Uses the ``entity-status-index`` GSI (entity as PK). A rerun after a

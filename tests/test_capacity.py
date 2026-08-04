@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dags"))
-from utils.capacity import plan_from_manifests, plan_glue_capacity  # noqa: E402
+from utils.capacity import plan_from_manifests, plan_glue_capacity
 
 GB = 1024 ** 3
 

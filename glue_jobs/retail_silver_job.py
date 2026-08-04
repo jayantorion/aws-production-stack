@@ -18,8 +18,14 @@ from awsglue.job import Job
 from awsglue.utils import getResolvedOptions
 from pyspark.sql import DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
-from pyspark.sql.types import (DoubleType, IntegerType, StringType,
-                               StructField, StructType, TimestampType)
+from pyspark.sql.types import (
+    DoubleType,
+    IntegerType,
+    StringType,
+    StructField,
+    StructType,
+    TimestampType,
+)
 
 TYPE_MAP = {
     "int": IntegerType(), "string": StringType(),
@@ -35,6 +41,7 @@ logger = glue_context.get_logger()
 
 # Fetch entity config staged on S3 by the pipeline (config/entities.yaml)
 import boto3
+
 bucket, key = args["CONFIG_S3"].replace("s3://", "").split("/", 1)
 raw_cfg = boto3.client("s3").get_object(Bucket=bucket, Key=key)["Body"].read()
 entities_cfg = yaml.safe_load(raw_cfg)["entities"]
@@ -103,7 +110,7 @@ def process_entity(entity: str) -> None:
     )
     df = dyf.toDF()
     if df.rdd.isEmpty():
-        logger.warn(f"[{entity}] no rows for predicate {predicate}; skipping")
+        logger.warning(f"[{entity}] no rows for predicate {predicate}; skipping")
         return
 
     # Bronze ingests carry batch metadata columns; capture latest arrival ts

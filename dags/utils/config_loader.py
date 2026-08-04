@@ -10,14 +10,14 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import yaml
 
 CONFIG_DIR = Path(os.getenv("DEP_CONFIG_DIR", Path(__file__).resolve().parents[2] / "config"))
 
 
-def _deep_get(d: Dict[str, Any], dotted: str) -> Any:
+def _deep_get(d: dict[str, Any], dotted: str) -> Any:
     cur: Any = d
     for part in dotted.split("."):
         if not isinstance(cur, dict) or part not in cur:
@@ -37,9 +37,9 @@ def _coerce(raw: str, current: Any) -> Any:
     return raw
 
 
-def load_settings(config_dir: Path | None = None) -> Dict[str, Any]:
+def load_settings(config_dir: Path | None = None) -> dict[str, Any]:
     path = (config_dir or CONFIG_DIR) / "settings.yaml"
-    with open(path, "r", encoding="utf-8") as fh:
+    with open(path, encoding="utf-8") as fh:
         settings = yaml.safe_load(fh)
 
     # ENV overrides: SETTINGS_S3__RAW_BUCKET -> s3.raw_bucket (double underscore = nesting)
@@ -56,9 +56,9 @@ def load_settings(config_dir: Path | None = None) -> Dict[str, Any]:
     return settings
 
 
-def load_entities(config_dir: Path | None = None) -> Dict[str, Any]:
+def load_entities(config_dir: Path | None = None) -> dict[str, Any]:
     path = (config_dir or CONFIG_DIR) / "entities.yaml"
-    with open(path, "r", encoding="utf-8") as fh:
+    with open(path, encoding="utf-8") as fh:
         entities = yaml.safe_load(fh)
     # Merge defaults into each entity (entity value wins)
     defaults = entities.get("defaults", {})
