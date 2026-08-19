@@ -25,7 +25,26 @@ from typing import Any
 import pandas as pd
 
 MANIFEST_NAME = "_MANIFEST.json"
-ROWS_PER_FILE = 200_000  # ~ keeps parts well under the 256 MB target
+TARGET_FILE_BYTES = 128 * 1024 * 1024          # match silver: ~128 MB per file
+MIN_ROWS_PER_FILE = 50_000
+MAX_ROWS_PER_FILE = 500_000
+SAMPLE_ROWS = 1_000
+
+
+def rows_per_file_for(df: pd.DataFrame, delimiter: str) -> int:
+    """Estimate rows per ~128 MB file from a sample of the actual data.
+
+    Prevents BOTH small files (too few rows) and oversized files (too many):
+    row widths vary hugely across entities (orders vs order_items).
+    """
+    if df.empty:
+        return MIN_ROWS_PER_FILE
+    sample = df.head(SAMPLE_ROWS)
+    buf = io.StringIO()
+    sample.to_csv(buf, header=False, index=False, sep=delimiter, lineterminator="\n")
+    avg_row_bytes = len(buf.getvalue().encode("utf-8")) / max(len(sample), 1)
+    return int(max(MIN_ROWS_PER_FILE,
+                   min(MAX_ROWS_PER_FILE, TARGET_FILE_BYTES / max(avg_row_bytes, 1))))
 
 
 def generate_batch_id() -> str:
@@ -109,9 +128,10 @@ def land_to_bronze(
     files: list[dict[str, Any]] = []
     total_rows = 0
     delimiter = entity_cfg.get("delimiter", ",")
+    rows_per_file = rows_per_file_for(df, delimiter)   # ~128 MB per part
 
-    for part_no, start in enumerate(range(0, max(len(df), 1), ROWS_PER_FILE)):
-        chunk = df.iloc[start:start + ROWS_PER_FILE]
+    for part_no, start in enumerate(range(0, max(len(df), 1), rows_per_file)):
+        chunk = df.iloc[start:start + rows_per_file]
         buffer = io.StringIO()
         chunk.to_csv(buffer, header=False, index=False, sep=delimiter, lineterminator="\n")
         payload = buffer.getvalue().encode("utf-8")

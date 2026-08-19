@@ -26,6 +26,7 @@ from pyspark.sql.types import (
     StructType,
     TimestampType,
 )
+from spark_utils import TARGET_FILE_MB, configure_aqe, write_sized
 
 TYPE_MAP = {
     "int": IntegerType(), "string": StringType(),
@@ -36,6 +37,7 @@ PII_FIELDS = {"customer_password", "customer_email"}
 args = getResolvedOptions(sys.argv, ["JOB_NAME", "ENTITIES", "BATCH_IDS",
                                      "RAW_DB", "SILVER_BUCKET", "CONFIG_S3"])
 spark = SparkSession.builder.getOrCreate()
+configure_aqe(spark, TARGET_FILE_MB)   # small-file prevention: coalesce to 128 MB
 glue_context = GlueContext(spark.sparkContext)
 logger = glue_context.get_logger()
 
@@ -130,15 +132,18 @@ def process_entity(entity: str) -> None:
     if rejects.rdd.isEmpty() is False:
         rejects.write.mode("append").parquet(f"{REJECTS_PREFIX}/{entity}/")
 
-    # Standardize timestamps to UTC, write Parquet+Snappy partitioned by ingest_date
+    # Standardize timestamps to UTC; write Parquet+Snappy partitioned by
+    # ingest_date with output files sized to ~128 MB (small-file prevention)
     out = (clean.drop("batch_ingest_ts")
                 .withColumn("ingest_date", F.col("ingest_date")))
-    (out.write.mode("overwrite")
-        .option("replaceWhere", predicate)       # batch-scoped overwrite: idempotent
-        .option("compression", "snappy")
-        .partitionBy("ingest_date")
-        .parquet(f"{SILVER_PREFIX}/{entity}/"))
-    logger.info(f"[{entity}] silver write complete: {out.count()} rows")
+    target_files = write_sized(
+        out, f"{SILVER_PREFIX}/{entity}/",
+        partition_cols=["ingest_date"],
+        target_mb=TARGET_FILE_MB,
+        replace_where=predicate,                 # batch-scoped overwrite: idempotent
+    )
+    logger.info(f"[{entity}] silver write complete: {out.count()} rows "
+                f"into ~{target_files} file(s) of ~{TARGET_FILE_MB} MB")
 
 
 job = Job(glue_context)

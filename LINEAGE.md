@@ -330,7 +330,26 @@ data-engineering-platform/
 
 ---
 
-## 12. CHANGE LOG / STATUS
+## 12. SMALL-FILE POLICY — 128 MB TARGET (added 2026-09-02)
+
+Small files = the #1 metadata/performance tax on S3 lakehouses (S3 request costs,
+Glue Catalog/Athena LIST + Parquet-footer overhead, slow planning). Policy: **every
+write path targets ~128 MB files.**
+
+| Layer | Mechanism |
+|---|---|
+| Bronze landing | `rows_per_file_for()` samples real row widths → parts sized ~128 MB (replaces fixed row counts) |
+| Silver ETL | `write_sized()` in `glue_jobs/spark_utils.py`: estimated bytes ÷ 128 MB → `repartition(n, partition_cols)` → one sized file per partition dir |
+| Spark config | AQE on, `advisoryPartitionSizeInBytes=128MB`, `parallelismFirst=false` |
+| Historical repair | `glue_jobs/compact_silver_job.py` — re-reads a date range, rewrites compacted via replaceWhere (idempotent) |
+| Guardrail | Daily batch grain → 1–2 files per partition by construction; `max_active_runs=1` prevents crumb storms |
+
+**Compaction is never append-style** — rewrites are batch/partition-scoped, so
+compaction preserves the idempotency guarantees of §3.
+
+---
+
+## 13. CHANGE LOG / STATUS
 
 | Date | Change | Status |
 |------|--------|--------|
@@ -350,6 +369,11 @@ data-engineering-platform/
 | 2026-09-02 | IaC: `infra/cloudformation.yaml` (buckets, registry, SNS, IAM, Glue, Lambda) + `scripts/deploy.sh` | ✅ Done |
 | 2026-09-02 | README rewritten: file-by-file reference + 10-step implementation guide (all tools) + growth/failure-recovery explanations | ✅ Done |
 | 2026-09-02 | Tests expanded to 13 (state-store resume, capacity tiers) — all passing | ✅ Done |
+| 2026-09-02 | CI fixed: ruff.toml added, all lint auto-fixed, actions bumped (v5/v6) — CI green | ✅ Done |
+| 2026-09-02 | Small-file optimization: `spark_utils.write_sized` (128 MB), AQE tuning, size-aware bronze parts, `compact_silver_job.py` | ✅ Done |
+| 2026-09-02 | Full validation sweep: 16 py files compile, YAML/TOML parse, ruff clean, 13/13 tests, smoke test, data integrity verified | ✅ Done |
+| 2026-09-02 | README: file→AWS mapping table + debugging guide (error → where → fix) | ✅ Done |
+| 2026-09-02 | `explaination/` interview guide created (LOCAL ONLY, gitignored — never pushed) | ✅ Done |
 | Deployment: Airflow/MWAA, Glue job+crawler registration, Lambda deploy, DynamoDB table, Redshift env | AWS environment setup | ⏳ Pending |
 
 > **Maintainer note:** whenever you add/modify a stage, table, or optimization — update the

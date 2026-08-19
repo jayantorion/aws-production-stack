@@ -26,6 +26,10 @@ credentials*.json
 
 # Data / local artifacts
 data/
+
+# Local private docs (never pushed)
+explaination/
+
 *.parquet
 *.csv
 !tests/fixtures/*.csv

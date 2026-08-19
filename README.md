@@ -121,6 +121,45 @@ data-engineering-platform/
 └── .github/workflows/ci.yml          # CI: ruff lint + pytest on every push/PR
 ```
 
+## 📦 Where every file lives (local → AWS mapping)
+
+| Local file/folder | AWS service it becomes | Exact location / how it gets there |
+|---|---|---|
+| `dags/retail_medallion_pipeline.py` + `dags/utils/*` | **Airflow / MWAA** | `$AIRFLOW_HOME/dags/` (local) or MWAA DAG S3 folder (synchronized automatically) |
+| `config/entities.yaml` | **S3** (raw bucket) + read by Glue & Lambda | `s3://<raw-bucket>/config/entities.yaml` — uploaded by `scripts/deploy.sh` |
+| `config/settings.yaml` | Environment config for Airflow tasks | Stays with the DAG; per-env overrides via `SETTINGS_*` env vars in MWAA/Airflow |
+| `glue_jobs/retail_silver_job.py` + `glue_jobs/spark_utils.py` | **Glue ETL job** (Spark) | `s3://<deploy-bucket>/glue/` — set as the job's ScriptLocation (`scripts/deploy.sh`) |
+| `glue_jobs/compact_silver_job.py` | **Glue ETL job** (Spark) | `s3://<deploy-bucket>/glue/` — registered as `dep-silver-compact-job` |
+| `lambda/arrival_validator/handler.py` | **Lambda** | zipped (`scripts/deploy.sh`) → function `dep-arrival-validator`; S3 event on `*_MANIFEST.json` triggers it |
+| `sql/redshift_ddl.sql` | **Redshift** | Run once via Redshift Query Editor / `psql -f` |
+| `sql/redshift_load_template.sql` | Logic embedded in `dags/utils/redshift_loader.py` | Executed per batch via the **Redshift Data API** at runtime |
+| `sql/athena_dq_checks.sql` | Logic embedded in `dags/utils/athena_dq.py` | Executed per run via the **Athena** engine at runtime |
+| `infra/cloudformation.yaml` | **CloudFormation** stack `dep-core` | `aws cloudformation deploy` (Step 3 of the guide) |
+| `sample_data/retail_db/` | Dev source-of-record | Local files read by the DAG; replaced by MySQL/SFTP/REST in prod |
+| `scripts/deploy.sh` | Runs from laptop/CI | Orchestrates packaging + CFN + config upload + S3 event wiring |
+
+**Spark data flow reminder (inside Glue):** raw S3 → `create_dynamic_frame.from_catalog` (partition-pruned) → `toDF()` → PySpark transforms (cast, DQ, dedupe, evolution) → `write_sized()` → silver S3 (Parquet, ~128 MB files) → COPYed to Redshift.
+
+## 🐞 Debugging guide — error → where to look → fix
+
+| Symptom | Where to look | Likely cause → Fix |
+|---|---|---|
+| DAG fails to parse / import error | Airflow UI → DAGs → red import error; scheduler logs | Syntax/bad import → fix locally (`ruff check`, `pytest`); verify `dags/utils` packaged with DAG |
+| `land_bronze_*` fails: `FileNotFoundError` | Airflow task log | `sources.local_base_path` wrong → fix `settings.yaml` or set `SETTINGS_SOURCES__LOCAL_BASE_PATH` |
+| Lambda never fires | CloudWatch → log group `/aws/lambda/dep-arrival-validator`; S3 → Properties → Event notifications | Notification not wired → rerun Step 4; suffix filter missing `_MANIFEST.json` |
+| Batches quarantined | `s3://<quarantine-bucket>/`, SNS email, DynamoDB `batch_registry` → `detail.reason` | checksum/rowcount mismatch → verify source file integrity; re-run after fixing upstream |
+| Crawler `FAILED` | Glue console → Crawler → Runs; IAM role `dep-crawler-*` | Missing `AWSGlueServiceRole` or S3 read → fix role policy |
+| Glue job `FAILED` / OOM | CloudWatch → `/aws-glue/jobs/output` & `/aws-glue/jobs/error` logs | OOM on dedupe/join → raise workers (capacity tiers) or bump DPU; bad data → check rejects path |
+| "Incompatible schema change" raised | Glue job logs | Backward-incompatible change → align `entities.yaml` with source; additive columns auto-handled |
+| Athena DQ check fails (pipeline hard-stops) | Athena console → Query history; `s3://…/silver_rejects/` | Bad data in silver → inspect rejects, fix upstream, re-run; check definition if threshold too strict |
+| Redshift COPY error / access denied | `STL_LOAD_ERRORS`, `SVL_STATEMENTSUMMARY`; cluster IAM role | Role missing silver-bucket read → attach policy; wrong workgroup → check `settings.yaml` |
+| Duplicate rows in analytics | `batch_registry` stage history; compare `batch_id` counts | Should be impossible by design → check a stage bypassed the merge template; rerun the load (self-healing) |
+| Small files creeping in | `aws s3 ls` on silver prefix; avg object size | Backfills/high-frequency runs → run `compact_silver_job` for affected `ingest_date`s |
+| Athena queries slow/expensive | Athena → query scan bytes | Missing partition filter → ensure `ingest_date` predicate; columnar Parquet + 128 MB files already mitigate |
+| Redshift BI queries slow | `EXPLAIN`, `SVL_QUERY_SUMMARY` (skew), WLM queue logs | Skewed distkey → check `DISTSTYLE`; stale stats → `ANALYZE`; move heavy aggregates to materialized views |
+| DAG runs late / SLA miss | Airflow → Gantt/SLA views; sensor timeouts | Upstream late arrival → sensors `reschedule` (no worker held); raise `timeout`, check Glue queue depth |
+
+
 # 🛠️ STEP-BY-STEP IMPLEMENTATION GUIDE
 
 ## Step 0 — Prerequisites
@@ -273,6 +312,22 @@ The checkpoint state machine (`LANDED → VALIDATED → CRAWLED → TRANSFORMED 
 moves **forward only** (`dags/utils/state_store.py`). Airflow retries failed tasks with
 exponential backoff (5→15→45 min); the pipeline resumes exactly where it stopped.
 
+## 🧹 Small-file policy — 128 MB everywhere (added 2026-09-02)
+
+Small files are the #1 silent killer of S3-based lakehouses: thousands of tiny
+objects → S3 request costs, Glue/Athena metadata (LIST + Parquet footer) overhead,
+slow query planning. This project prevents them at **every write path**:
+
+| Layer | Mechanism |
+|---|---|
+| Bronze landing | `rows_per_file_for()` samples real row widths and splits parts to ~**128 MB** each (no fixed row counts) |
+| Silver ETL | `write_sized()` computes file count from estimated bytes → `repartition(n, partition_cols)` → ~128 MB files per partition dir |
+| Spark config | AQE enabled with `advisoryPartitionSizeInBytes=128MB`, `parallelismFirst=false` |
+| Historical repair | `glue_jobs/compact_silver_job.py` re-reads any date range and rewrites it compacted (replaceWhere, idempotent) |
+| Prevention guardrail | One batch per entity per day → 1–2 files per partition by construction |
+
 > 📖 Deep details on every design decision live in **[LINEAGE.md](./LINEAGE.md)**.
+
+
 
 
