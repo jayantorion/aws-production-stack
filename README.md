@@ -34,7 +34,7 @@ Power BI (gold consumption layer)
 
 ## 📖 Documentation
 
-- **[LINEAGE.md](./LINEAGE.md)** — the single source of truth: full flowchart, stage-by-stage data flow, idempotency design, incremental loading strategy, failure recovery, capacity plan, security, and the dataset lineage tracker. **Keep it updated.**
+- **`LINEAGE.md`** — internal project source of truth (full flowchart, stage-by-stage data flow, idempotency design, incremental loading strategy, failure recovery, capacity plan, security, dataset lineage tracker). **Local-only by design — kept out of the repo via `.gitignore`; maintain it in your working copy.**
 
 ## 🚦 Key Guarantees
 
@@ -65,9 +65,9 @@ capacity planner scales Glue workers automatically.
 
 ```
 data-engineering-platform/
-├── LINEAGE.md                        # ⭐ SINGLE SOURCE OF TRUTH: architecture, data flow,
-│                                     #   idempotency, incremental strategy, capacity, security,
-│                                     #   dataset lineage table, change log. Update with every change.
+├── LINEAGE.md                        # ⭐ project's internal source of truth (architecture, data flow,
+│                                     #   idempotency, capacity, lineage table, change log) — LOCAL ONLY,
+│                                     #   kept out of GitHub via .gitignore
 ├── README.md                         # this guide
 │
 ├── config/
@@ -326,7 +326,7 @@ slow query planning. This project prevents them at **every write path**:
 | Historical repair | `glue_jobs/compact_silver_job.py` re-reads any date range and rewrites it compacted (replaceWhere, idempotent) |
 | Prevention guardrail | One batch per entity per day → 1–2 files per partition by construction |
 
-> 📖 Deep details on every design decision live in **[LINEAGE.md](./LINEAGE.md)**.
+> 📖 Deep design details live in `LINEAGE.md` (local-only, not in this repo).
 
 
 

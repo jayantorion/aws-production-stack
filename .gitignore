@@ -29,6 +29,7 @@ data/
 
 # Local private docs (never pushed)
 explaination/
+LINEAGE.md
 
 *.parquet
 *.csv
