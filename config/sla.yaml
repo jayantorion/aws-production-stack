@@ -1,0 +1,36 @@
+# =============================================================================
+# SLA DEFINITIONS — machine-readable, enforced by dags/utils/sla_monitor.py
+# Human-readable contract: docs/SLA.md
+# =============================================================================
+freshness:
+  gold_ready_by_utc: "04:00"      # SLA-F1: analytics.* ready for Power BI
+  silver_ready_by_utc: "03:15"    # SLA-F3
+  bronze_done_by_utc: "02:40"     # SLA-F4
+  max_event_to_gold_lag_hours: 26 # SLA-F2
+
+pipeline:
+  dagrun_timeout_minutes: 150     # total run budget
+  stage_sla_minutes:              # per-task Airflow `sla` (minutes from run start)
+    land_bronze: 30
+    lambda_arrival_validation: 10
+    glue_crawler_ready: 45
+    glue_silver_job: 90
+    athena_dq_gate: 15
+    redshift_load: 30
+
+reliability:
+  monthly_success_rate_target: 0.99   # SLA-R1
+  completeness_reconciliation: true   # SLA-R2
+  zero_duplicate_keys: true           # SLA-R3
+
+recovery:
+  rpo_hours: 24
+  rto_hours: 4
+  backfill_turnaround_hours: 2
+
+alerts:
+  cloudwatch_namespace: "DEP/SLA"
+  metrics:
+    - GoldFreshnessLagMinutes
+    - SlasMissed
+    - StageOverrunMinutes

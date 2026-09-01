@@ -18,6 +18,7 @@ aws cloudformation deploy --template-file infra/cloudformation.yaml --stack-name
 RAW_BUCKET=$(aws cloudformation describe-stacks --stack-name "$STACK" \
   --query "Stacks[0].Outputs[?OutputKey=='RawBucket'].OutputValue" --output text)
 aws s3 cp config/entities.yaml "s3://$RAW_BUCKET/config/entities.yaml"
+aws s3 cp config/sla.yaml "s3://$RAW_BUCKET/config/sla.yaml"
 
 # 4) wire S3 event notification on manifests -> Lambda
 FUNCTION_ARN=$(aws cloudformation describe-stacks --stack-name "$STACK" \

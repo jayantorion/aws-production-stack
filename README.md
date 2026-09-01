@@ -121,6 +121,19 @@ data-engineering-platform/
 └── .github/workflows/ci.yml          # CI: ruff lint + pytest on every push/PR
 ```
 
+## 📊 Business Requirements & SLA
+
+| Document | Purpose |
+|---|---|
+| **`docs/BUSINESS_REQUIREMENTS.md`** | Real-world business context: stakeholders, objectives (BO-1..5), functional requirements (FR-1..13), NFRs, data volumes, acceptance criteria |
+| **`docs/SLA.md`** | The formal SLA: freshness (gold ready **by 04:00 UTC daily**), per-stage runtime budgets, 99% monthly success rate, RPO 24h / RTO 4h, P1–P4 severity matrix with response/resolution targets, measurement & exclusions |
+| **`config/sla.yaml`** | Machine-readable SLA consumed by the pipeline |
+| **`dags/utils/sla_monitor.py`** | Enforcement: per-task Airflow `sla` budgets, `sla_miss_callback` → SNS P1/P2 alerts, CloudWatch `DEP/SLA` metrics, final `gold_freshness_sla_gate` task that fails the run (P1 incident) if gold misses the 04:00 UTC deadline |
+
+The SLA is not just documentation — it is **enforced in code**: every task carries its
+budget, SLA misses fire alerts automatically, and the DAG cannot complete successfully
+unless the freshness gate passes.
+
 ## 📦 Where every file lives (local → AWS mapping)
 
 | Local file/folder | AWS service it becomes | Exact location / how it gets there |
@@ -136,6 +149,9 @@ data-engineering-platform/
 | `sql/athena_dq_checks.sql` | Logic embedded in `dags/utils/athena_dq.py` | Executed per run via the **Athena** engine at runtime |
 | `infra/cloudformation.yaml` | **CloudFormation** stack `dep-core` | `aws cloudformation deploy` (Step 3 of the guide) |
 | `sample_data/retail_db/` | Dev source-of-record | Local files read by the DAG; replaced by MySQL/SFTP/REST in prod |
+| `config/sla.yaml` | **S3** (raw bucket `/config/`) + Airflow | SLA budgets read by DAG tasks & `sla_miss_callback` |
+| `docs/BUSINESS_REQUIREMENTS.md` · `docs/SLA.md` | Governance documents | Repo docs; referenced in monthly SLA reporting |
+| `dags/utils/sla_monitor.py` | **Airflow + CloudWatch + SNS** | Task budgets, SLA-miss alerts, `DEP/SLA` metrics, freshness gate |
 | `scripts/deploy.sh` | Runs from laptop/CI | Orchestrates packaging + CFN + config upload + S3 event wiring |
 
 **Spark data flow reminder (inside Glue):** raw S3 → `create_dynamic_frame.from_catalog` (partition-pruned) → `toDF()` → PySpark transforms (cast, DQ, dedupe, evolution) → `write_sized()` → silver S3 (Parquet, ~128 MB files) → COPYed to Redshift.

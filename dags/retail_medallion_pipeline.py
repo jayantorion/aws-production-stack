@@ -24,12 +24,21 @@ from utils.bronze import (
 )
 from utils.capacity import plan_from_manifests
 from utils.config_loader import load_entities, load_settings
+from utils.sla_monitor import (
+    SLA,
+    check_gold_freshness,
+    sla_miss_callback,
+    stage_sla_minutes,
+)
 from utils.state_store import StateStore
 
 SETTINGS = load_settings()
 ENTITIES = load_entities()
 ENTITY_NAMES = list(ENTITIES.keys())
 STATE = StateStore(region=SETTINGS["region"])
+
+# SLA enforcement (docs/SLA.md, config/sla.yaml): per-task budgets + total budget
+DAGRUN_TIMEOUT = timedelta(minutes=SLA["pipeline"]["dagrun_timeout_minutes"])
 
 DEFAULT_ARGS = {
     "owner": "data-platform",
@@ -166,6 +175,17 @@ def redshift_load(**context) -> list[str]:
 # --------------------------------------------------------------------------- #
 # DAG definition
 # --------------------------------------------------------------------------- #
+def gold_freshness_gate(**context) -> dict:
+    """SLA-F1 (docs/SLA.md): gold must be ready by 04:00 UTC the day after the
+    data date. Emits CloudWatch `GoldFreshnessLagMinutes`; breach = P1 incident."""
+    from datetime import datetime, timezone
+
+    now_utc = datetime.now(timezone.utc)
+    data_date = context["logical_date"].date()
+    return check_gold_freshness(
+        SETTINGS, now_utc, data_date, region=SETTINGS["region"])
+
+
 with DAG(
     dag_id="retail_medallion_pipeline",
     description="Retail DB: bronze landing -> validation -> silver -> DQ -> redshift",
@@ -173,13 +193,16 @@ with DAG(
     start_date=datetime(2026, 1, 1),
     catchup=False,
     max_active_runs=1,                # prevents out-of-order batch overwrites
+    dagrun_timeout=DAGRUN_TIMEOUT,    # SLA: total run budget (150 min)
+    sla_miss_callback=sla_miss_callback,   # SLA-miss -> P2 SNS alert + CW metric
     default_args=DEFAULT_ARGS,
-    tags=["retail", "medallion", "production"],
+    tags=["retail", "medallion", "production", "sla"],
 ) as dag:
     land_tasks = [
         PythonOperator(
             task_id=f"land_bronze_{entity}",
             python_callable=land_entity_task,
+            sla=timedelta(minutes=stage_sla_minutes("land_bronze")),
             op_kwargs={"entity": entity,
                        "watermark": None,   # pulled from control table in prod (LINEAGE §4)
                        "ceiling": None},
@@ -188,17 +211,28 @@ with DAG(
     ]
 
     validate = PythonOperator(task_id="lambda_arrival_validation",
+                              sla=timedelta(minutes=stage_sla_minutes("lambda_arrival_validation")),
                               python_callable=trigger_arrival_validation)
 
     crawl_ready = PythonSensor(task_id="glue_crawler_ready", poke_callable=_crawler_ready,
-                               mode="reschedule", timeout=60 * 60, poke_interval=60)
+                               mode="reschedule",
+                               timeout=stage_sla_minutes("glue_crawler_ready") * 60,
+                               poke_interval=60)
 
-    glue_start = PythonOperator(task_id="glue_silver_job", python_callable=start_glue_silver_job)
+    glue_start = PythonOperator(task_id="glue_silver_job",
+                                sla=timedelta(minutes=stage_sla_minutes("glue_silver_job")),
+                                python_callable=start_glue_silver_job)
     glue_done = PythonSensor(task_id="glue_silver_done", poke_callable=_glue_job_done,
                              mode="reschedule", timeout=60 * 60 * 3, poke_interval=120)
 
-    dq_gate = PythonOperator(task_id="athena_dq_gate", python_callable=athena_dq_gate)
-    rs_load = PythonOperator(task_id="redshift_load", python_callable=redshift_load)
+    dq_gate = PythonOperator(task_id="athena_dq_gate",
+                             sla=timedelta(minutes=stage_sla_minutes("athena_dq_gate")),
+                             python_callable=athena_dq_gate)
+    rs_load = PythonOperator(task_id="redshift_load",
+                             sla=timedelta(minutes=stage_sla_minutes("redshift_load")),
+                             python_callable=redshift_load)
+    fresh_gate = PythonOperator(task_id="gold_freshness_sla_gate",   # SLA-F1 gate
+                                python_callable=gold_freshness_gate)
 
-    land_tasks >> validate >> crawl_ready >> glue_start >> glue_done >> dq_gate >> rs_load
+    land_tasks >> validate >> crawl_ready >> glue_start >> glue_done >> dq_gate >> rs_load >> fresh_gate
 

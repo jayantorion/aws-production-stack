@@ -56,6 +56,15 @@ def load_settings(config_dir: Path | None = None) -> dict[str, Any]:
     return settings
 
 
+def load_yaml_file(path: str | Path) -> dict[str, Any]:
+    """Load any YAML config file (e.g. sla.yaml) from the config dir or abs path."""
+    p = Path(path)
+    if not p.is_absolute():
+        p = CONFIG_DIR / p
+    with open(p, encoding="utf-8") as fh:
+        return yaml.safe_load(fh)
+
+
 def load_entities(config_dir: Path | None = None) -> dict[str, Any]:
     path = (config_dir or CONFIG_DIR) / "entities.yaml"
     with open(path, encoding="utf-8") as fh:
