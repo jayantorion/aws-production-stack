@@ -48,6 +48,17 @@ Power BI (gold consumption layer)
 | Bad data | Quarantine bucket + rejects path + Athena DQ hard-stop before Redshift |
 | Scale (30–50 GB/day) | Partition pruning, 128–512 MB files, Glue auto-scaling, Redshift dist/sort keys + WLM |
 
+## 🗓️ Project Timeline (solo build)
+
+| Phase | Period | Work |
+|---|---|---|
+| 1 — Design & architecture | Jun 20 – Jun 30, 2026 | Architecture, medallion design, LINEAGE tracker, repo bootstrap |
+| 2 — Config + bronze core | Jul 1 – Jul 10 | Entity contracts, settings, batch_id landing, manifests, incremental filters |
+| 3 — Orchestration & transform | Jul 6 – Jul 24 | Airflow DAG, Glue Silver ETL, Lambda validator, Redshift/Athena SQL, state store |
+| 4 — Infra & CI hardening | Jul 27 – Aug 7 | CloudFormation IaC, deploy script, CI fixes, implementation guide |
+| 5 — Small-file optimization | Aug 10 – Aug 21 | 128 MB sized writes, AQE tuning, compaction job, debugging guide |
+| 6 — SLA & governance | Aug 24 – Sep 2 | Business requirements, formal SLA, code-level SLA enforcement, freshness gate |
+
 ## 🗃️ Sample Data (in-repo)
 
 Development source-of-record: the classic **retail_db** dataset, committed under
@@ -328,7 +339,7 @@ The checkpoint state machine (`LANDED → VALIDATED → CRAWLED → TRANSFORMED 
 moves **forward only** (`dags/utils/state_store.py`). Airflow retries failed tasks with
 exponential backoff (5→15→45 min); the pipeline resumes exactly where it stopped.
 
-## 🧹 Small-file policy — 128 MB everywhere (added 2026-09-02)
+## 🧹 Small-file policy — 128 MB everywhere (August 2026)
 
 Small files are the #1 silent killer of S3-based lakehouses: thousands of tiny
 objects → S3 request costs, Glue/Athena metadata (LIST + Parquet footer) overhead,

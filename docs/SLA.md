@@ -1,6 +1,6 @@
 # Service Level Agreement (SLA) — Retail Analytics Data Platform
 
-> Version 1.0 · Effective: 2026-09-02 · Provider: Data Platform Team · Consumers: BI Team / Power BI developers / business stakeholders
+> Version 1.0 · Effective: 2026-08-31 · Provider: Data Platform Team · Consumers: BI Team / Power BI developers / business stakeholders
 > Enforcement: `config/sla.yaml` → Airflow task SLAs, SLA-miss alerts, freshness gate (`dags/utils/sla_monitor.py`)
 
 ## 1. Scope
